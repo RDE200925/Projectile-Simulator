@@ -1,0 +1,162 @@
+import math
+import sys
+
+# Constants for atmosphere (simplified standard atmosphere model)
+SEA_LEVEL_PRESSURE = 101325  # Pascals
+SEA_LEVEL_TEMPERATURE = 288.15  # Kelvin (15°C)
+TEMPERATURE_LAPSE_RATE = -0.0065  # K/m, standard lapse rate up to 11km
+GAS_CONSTANT = 287.05  # J/(kg·K)
+GRAVITY = 9.80665  # m/s²
+
+def calculate_pressure(altitude, weather_pressure_factor=1.0):
+    """
+    Calculate air pressure at altitude using barometric formula (up to 11 km).
+    Assumes constant lapse rate and ignores humidity effects.
+    """
+    if altitude > 11000:
+        altitude = 11000  # cap for simplified model
+    temp = SEA_LEVEL_TEMPERATURE + TEMPERATURE_LAPSE_RATE * altitude
+    # Barometric formula for pressure
+    pressure = SEA_LEVEL_PRESSURE * (temp / SEA_LEVEL_TEMPERATURE) ** (-GRAVITY / (TEMPERATURE_LAPSE_RATE * GAS_CONSTANT))
+    return pressure * weather_pressure_factor
+
+def calculate_temperature(altitude, weather_temp_offset=0.0):
+    """
+    Calculate temperature at altitude assuming linear lapse rate up to 11 km.
+    """
+    if altitude > 11000:
+        altitude = 11000
+    temp = SEA_LEVEL_TEMPERATURE + TEMPERATURE_LAPSE_RATE * altitude + weather_temp_offset
+    return temp
+
+def input_option(prompt, options):
+    print(f"\n{prompt}")
+    for i, option in enumerate(options, 1):
+        print(f"  {i}. {option['name']}")
+    while True:
+        choice = input("Enter option number: ")
+        if choice.isdigit():
+            choice = int(choice)
+            if 1 <= choice <= len(options):
+                return options[choice-1]
+        print("Invalid input. Please enter a valid number.")
+
+def simulate_flight(rocket, engine, weather, flight_time):
+    """
+    Simulate rocket flight over given time period.
+    Simplifications:
+    - Constant mass rocket (no fuel burn)
+    - Constant thrust during flight
+    - Simplified drag force and constant drag coefficient
+    - Atmospheric properties modeled with basic ISA up to 11km
+    - No multi-stage or orbital physics
+    - Velocity capped at terminal velocity to keep results reasonable
+    """
+
+    thrust = engine['thrust']          # Newtons
+    mass = rocket['mass']              # kg
+    drag_coefficient = rocket['drag_coefficient']
+    area = rocket['cross_section_area']  # m^2
+    air_density_sea_level = 1.225 * weather['density_factor']  # kg/m^3 adjusted by weather
+
+    velocity = 0.0     # m/s initial velocity
+    altitude = 0.0     # initial altitude meters
+    dt = 1             # time step seconds
+    
+    # Approximate terminal velocity (simplified, used to cap velocity)
+    # vt = sqrt((2 * mass * gravity) / (air_density * Cd * A))
+    terminal_velocity = math.sqrt((2 * mass * GRAVITY)/(air_density_sea_level * drag_coefficient * area))
+    
+    time_data = []
+    for t in range(flight_time + 1):
+        air_density = air_density_sea_level * math.exp(-altitude / 8500)  # approximate density decay with altitude
+
+        drag = 0.5 * air_density * velocity * velocity * drag_coefficient * area
+        
+        net_force = thrust - drag - mass * GRAVITY
+        acceleration = net_force / mass
+
+        velocity += acceleration * dt
+        # Cap velocity to terminal velocity (prevent unphysical growth)
+        if velocity < 0:
+            velocity = 0
+        if velocity > terminal_velocity:
+            velocity = terminal_velocity
+
+        altitude += velocity * dt
+        
+        pressure = calculate_pressure(altitude, weather['pressure_factor'])
+        temperature = calculate_temperature(altitude, weather['temp_offset'])
+        temp_celsius = temperature - 273.15
+
+        time_data.append({
+            'Time (s)': t,
+            'Speed (m/s)': round(velocity, 2),
+            'Pressure (Pa)': round(pressure, 2),
+            'Temperature (°C)': round(temp_celsius, 2),
+            'Height (m)': round(altitude, 2)
+        })
+    
+    return time_data
+
+def print_table(data):
+    # Compute column widths
+    headers = list(data[0].keys())
+    cols = {h: max(len(h), *(len(str(row[h])) for row in data)) for h in headers}
+    # Print header
+    print()
+    header_line = " | ".join(h.ljust(cols[h]) for h in headers)
+    separator_line = "-+-".join("-"*cols[h] for h in headers)
+    print(header_line)
+    print(separator_line)
+    # Print rows
+    for row in data:
+        line = " | ".join(str(row[h]).ljust(cols[h]) for h in headers)
+        print(line)
+    print()
+
+def main():
+    print("="*70)
+    print("CLASSIC ROCKET SIMULATOR".center(70))
+    print("="*70)
+    print("\nWelcome to the Classic Rocket Flight Simulator!")
+    print("Please select options and input values when prompted.\n")
+
+    rocket_sizes = [
+        {'name': 'Small (mass=1000kg, diameter=2m)', 'mass': 1000, 'diameter': 2, 'cross_section_area': math.pi * (1)**2, 'drag_coefficient': 0.75},
+        {'name': 'Medium (mass=5000kg, diameter=5m)', 'mass': 5000, 'diameter': 5, 'cross_section_area': math.pi * (2.5)**2, 'drag_coefficient': 0.7},
+        {'name': 'Large (mass=20000kg, diameter=10m)', 'mass': 20000, 'diameter': 10, 'cross_section_area': math.pi * (5)**2, 'drag_coefficient': 0.6},
+    ]
+    engines = [
+        {'name': 'Chemical Rocket (Thrust = 1,000,000 N)', 'thrust': 1_000_000},
+        {'name': 'Ion Engine (Thrust = 250,000 N)', 'thrust': 250_000},
+        {'name': 'Nuclear Thermal (Thrust = 1,500,000 N)', 'thrust': 1_500_000},
+    ]
+    weather_conditions = [
+        {'name': 'Clear and Calm', 'pressure_factor': 1.0, 'temp_offset': 0, 'density_factor': 1.0},
+        {'name': 'Windy', 'pressure_factor': 0.98, 'temp_offset': -3, 'density_factor': 0.98},
+        {'name': 'Rainy', 'pressure_factor': 0.95, 'temp_offset': -5, 'density_factor': 1.05},
+        {'name': 'Stormy', 'pressure_factor': 0.90, 'temp_offset': -8, 'density_factor': 0.9},
+    ]
+
+    rocket = input_option("Select the rocket size:", rocket_sizes)
+    engine = input_option("Select the engine type:", engines)
+    weather = input_option("Select the weather condition during launch:", weather_conditions)
+
+    while True:
+        time_str = input("\nEnter the flight time period in seconds (e.g., 60): ")
+        if time_str.isdigit() and int(time_str) > 0:
+            flight_time = int(time_str)
+            break
+        print("Please enter a positive integer for the flight time.")
+
+    print(f"\nSimulating flight for {flight_time} seconds...\n")
+    data = simulate_flight(rocket, engine, weather, flight_time)
+
+    print_table(data)
+    print("Simulation complete. Thank you for using the Classic Rocket Simulator!")
+    print("="*70)
+
+if __name__ == "__main__":
+    main()
+
